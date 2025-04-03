@@ -2,6 +2,13 @@ import time
 import os
 import psycopg2
 from dotenv import load_dotenv
+
+# Désactiver explicitement tous les proxies au niveau du système AVANT d'importer Groq
+for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NO_PROXY']:
+    if proxy_var in os.environ:
+        os.environ[proxy_var] = ""
+
+# Maintenant on peut importer Groq en toute sécurité
 from groq import Groq, RateLimitError, APIError
 
 # Charger les variables d'environnement depuis .env
@@ -30,10 +37,16 @@ if not GROQ_API_KEY:
     print(f"FATAL [{AGENT_NAME}]: GROQ_API_KEY not found.")
     exit(1) # Arrêter le conteneur si la clé manque
 
-# Initialisation globale du client Groq
+# Initialisation globale du client Groq - VERSION SIMPLIFIÉE SANS RESTAURATION DE PROXY
 try:
+    # S'assurer une dernière fois que les proxies sont désactivés
+    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NO_PROXY']:
+        if proxy_var in os.environ:
+            os.environ[proxy_var] = ""
+    
+    # Initialiser le client sans l'influence des proxies
     client = Groq(api_key=GROQ_API_KEY)
-    print(f"[{AGENT_NAME}] Groq client initialized.")
+    print(f"[{AGENT_NAME}] Groq client initialized successfully.")
 except Exception as e:
     print(f"FATAL [{AGENT_NAME}]: Failed to initialize Groq client: {e}.")
     exit(1)

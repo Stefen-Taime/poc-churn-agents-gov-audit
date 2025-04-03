@@ -2,6 +2,13 @@ import time
 import os
 import psycopg2
 from dotenv import load_dotenv
+
+# Désactiver explicitement tous les proxies au niveau du système AVANT d'importer Groq
+for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NO_PROXY']:
+    if proxy_var in os.environ:
+        os.environ[proxy_var] = ""
+
+# Maintenant on peut importer Groq en toute sécurité
 from groq import Groq, RateLimitError, APIError
 
 # Charger les variables d'environnement depuis .env
@@ -15,7 +22,7 @@ DB_HOST = os.getenv("DB_HOST", "db")
 DB_PORT = os.getenv("DB_PORT", "5432")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-8b-8192")
-AGENT_NAME = 'action'
+AGENT_NAME = 'nlp'
 PROCESS_INTERVAL_SECONDS = int(os.getenv("ACTION_INTERVAL", "60"))
 API_RETRY_DELAY_SECONDS = int(os.getenv("API_RETRY_DELAY", "60"))
 DB_RETRY_DELAY_SECONDS = int(os.getenv("DB_RETRY_DELAY", "10"))
@@ -30,10 +37,16 @@ if not GROQ_API_KEY:
     print(f"FATAL [{AGENT_NAME}]: GROQ_API_KEY not found.")
     exit(1) # Arrêter le conteneur si la clé manque
 
-# Initialisation globale du client Groq
+# Initialisation globale du client Groq - VERSION SIMPLIFIÉE SANS RESTAURATION DE PROXY
 try:
+    # S'assurer une dernière fois que les proxies sont désactivés
+    for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'NO_PROXY']:
+        if proxy_var in os.environ:
+            os.environ[proxy_var] = ""
+    
+    # Initialiser le client sans l'influence des proxies
     client = Groq(api_key=GROQ_API_KEY)
-    print(f"[{AGENT_NAME}] Groq client initialized.")
+    print(f"[{AGENT_NAME}] Groq client initialized successfully.")
 except Exception as e:
     print(f"FATAL [{AGENT_NAME}]: Failed to initialize Groq client: {e}.")
     exit(1)
@@ -90,162 +103,179 @@ def connect_db():
     print(f"FATAL [{AGENT_NAME}]: Could not connect to the database. Exiting.")
     exit(1) # Arrêter si la connexion échoue après plusieurs tentatives
 
-def call_groq_generate_action(conn, customer_id, probability, risk_segment, feedback_summary, sentiment, topics):
-    """Appelle Groq pour générer une recommandation d'action."""
+def analyze_feedback(conn, customer_id, feedback_text):
+    """Appelle Groq pour analyser un feedback client."""
+    if not feedback_text or feedback_text.strip() == '':
+        return "No feedback provided", "Neutral", "No topics identified"
+    
     prompt = f"""
-    Act as an expert customer retention strategist for a retail bank.
-    A customer (ID: {customer_id}) needs a retention action recommendation based on the following data:
-
-    *   Churn Risk Probability: {probability:.2f} (Categorized as: {risk_segment})
-    *   Analysis of recent feedback (if available):
-        *   Summary: {feedback_summary if feedback_summary else 'N/A'}
-        *   Overall Sentiment: {sentiment if sentiment else 'N/A'}
-        *   Key Topics Mentioned: {topics if topics else 'N/A'}
-
-    Based ONLY on this information, provide ONE SINGLE, concise, and actionable next step for a bank employee.
-    - If risk is High and sentiment Negative, suggest an urgent and specific intervention addressing the topics.
-    - If risk is Medium, suggest a targeted proactive measure, possibly referencing feedback topics.
-    - If risk is Low, suggest standard monitoring or a simple positive reinforcement if feedback was good.
-    - Be specific where possible (e.g., "offer waiver for [topic]", "explain feature related to [topic]").
-    - Do not invent information not present above.
-
-    Respond with only the suggested action text, starting directly with the action verb. Example: "Schedule a call to discuss fee concerns and offer a one-time waiver." or "Monitor account activity; send standard loyalty email next cycle."
-
-    Suggested Action:
+    Act as an expert customer feedback analyzer for a retail bank.
+    
+    Analyze the following customer feedback (Customer ID: {customer_id}):
+    
+    "{feedback_text}"
+    
+    Provide your analysis in the following format:
+    
+    SUMMARY: [1-2 sentence summary of the key points in the feedback]
+    SENTIMENT: [Single word: Positive, Negative, or Neutral]
+    TOPICS: [Comma-separated list of key topics mentioned, max 5 topics]
+    
+    Keep your analysis factual and based only on what is explicitly mentioned in the feedback.
+    Do not make assumptions or add information not present in the text.
     """
-    log_audit_event(conn, 'GROQ_CALL_START', status='INFO', customer_id=customer_id, details=f"Generate action. Risk: {risk_segment}, Prob: {probability:.2f}, Model: {GROQ_MODEL}")
+    
+    log_audit_event(conn, 'GROQ_CALL_START', status='INFO', customer_id=customer_id, 
+                   details=f"Analyzing feedback. Length: {len(feedback_text)}, Model: {GROQ_MODEL}")
     start_time = time.time()
+    
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=GROQ_MODEL,
-            temperature=0.4, # Un peu directif
-            max_tokens=120,
-            timeout=25.0 # Timeout pour l'appel API
+            temperature=0.1,  # Réponse factuelle
+            max_tokens=200,
+            timeout=25.0  # Timeout pour l'appel API
         )
-        action = chat_completion.choices[0].message.content.strip()
-        # Nettoyer les préfixes potentiels
-        if action.startswith("Suggested Action:"): action = action.replace("Suggested Action:", "").strip()
-        if not action: action = "No specific action suggested by LLM." # Default si réponse vide
-
+        
+        analysis = chat_completion.choices[0].message.content.strip()
         duration = time.time() - start_time
-        log_audit_event(conn, 'GROQ_CALL_END', status='SUCCESS', customer_id=customer_id, details=f"Generated: '{action[:60]}...'. Duration: {duration:.2f}s")
-        print(f"   Groq generated action in {duration:.2f}s: {action[:80]}...")
-        return action
-
+        
+        # Extraire les parties de l'analyse
+        summary = "No summary generated"
+        sentiment = "Neutral"
+        topics = "No topics identified"
+        
+        for line in analysis.split('\n'):
+            if line.startswith('SUMMARY:'):
+                summary = line.replace('SUMMARY:', '').strip()
+            elif line.startswith('SENTIMENT:'):
+                sentiment = line.replace('SENTIMENT:', '').strip()
+            elif line.startswith('TOPICS:'):
+                topics = line.replace('TOPICS:', '').strip()
+        
+        log_audit_event(conn, 'GROQ_CALL_END', status='SUCCESS', customer_id=customer_id, 
+                       details=f"Analysis completed. Sentiment: {sentiment}. Duration: {duration:.2f}s")
+        print(f"   Groq analyzed feedback in {duration:.2f}s. Sentiment: {sentiment}")
+        
+        return summary, sentiment, topics
+        
     except RateLimitError as e:
         duration = time.time() - start_time
-        log_audit_event(conn, 'GROQ_CALL_END', status='FAILURE', customer_id=customer_id, details=f"Rate Limit Error after {duration:.2f}s: {e}")
+        log_audit_event(conn, 'GROQ_CALL_END', status='FAILURE', customer_id=customer_id, 
+                       details=f"Rate Limit Error after {duration:.2f}s: {e}")
         print(f"WARNING [{AGENT_NAME}]: Groq Rate Limit Reached for customer {customer_id}.")
-        return None # Indique condition pour retry/attente
+        return None, None, None  # Indique rate limit
+        
     except APIError as e:
         duration = time.time() - start_time
-        log_audit_event(conn, 'GROQ_CALL_END', status='ERROR', customer_id=customer_id, details=f"API Error after {duration:.2f}s: {e}")
+        log_audit_event(conn, 'GROQ_CALL_END', status='ERROR', customer_id=customer_id, 
+                       details=f"API Error after {duration:.2f}s: {e}")
         print(f"ERROR [{AGENT_NAME}]: Groq API Error for customer {customer_id}: {e}")
-        return "API_ERROR" # Indique erreur permanente pour cet essai
+        return "API_ERROR", "API_ERROR", "API_ERROR"
+        
     except Exception as e:
         duration = time.time() - start_time
         error_type = type(e).__name__
-        log_audit_event(conn, 'GROQ_CALL_END', status='ERROR', customer_id=customer_id, details=f"Unexpected Groq Error ({error_type}) after {duration:.2f}s: {e}")
+        log_audit_event(conn, 'GROQ_CALL_END', status='ERROR', customer_id=customer_id, 
+                       details=f"Unexpected Groq Error ({error_type}) after {duration:.2f}s: {e}")
         print(f"ERROR [{AGENT_NAME}]: Unexpected error during Groq call for customer {customer_id}: {e}")
-        return "UNEXPECTED_ERROR"
+        return "UNEXPECTED_ERROR", "UNEXPECTED_ERROR", "UNEXPECTED_ERROR"
 
-def process_predictions_for_actions(conn):
-    """Traite les prédictions qui n'ont pas encore d'action recommandée."""
-    log_audit_event(conn, 'BATCH_START', status='INFO', details=f"Checking for predictions needing actions (batch size: {ACTION_BATCH_SIZE}).")
-    print(f"\n[{AGENT_NAME}] Checking for predictions...")
-    predictions_to_process = []
+def process_feedback_for_analysis(conn):
+    """Traite les feedbacks clients qui n'ont pas encore été analysés."""
+    log_audit_event(conn, 'BATCH_START', status='INFO', 
+                   details=f"Checking for feedback needing analysis (batch size: {ACTION_BATCH_SIZE}).")
+    print(f"\n[{AGENT_NAME}] Checking for customer feedback...")
+    feedback_to_process = []
     processed_in_batch = 0
     api_related_failure = False
 
     try:
         with conn.cursor() as cur:
-            # Sélectionner prédictions sans action, joindre analyse NLP, traiter par lots
+            # Sélectionner feedbacks sans analyse, traiter par lots
             cur.execute(
                 """
-                SELECT
-                    p.customer_id, p.churn_probability,
-                    fa.feedback_summary, fa.sentiment, fa.key_topics
-                FROM predictions p
-                LEFT JOIN feedback_analysis fa ON p.customer_id = fa.customer_id
-                LEFT JOIN actions a ON p.customer_id = a.customer_id
-                WHERE a.action_id IS NULL
-                ORDER BY p.predicted_at ASC -- Traiter les plus anciennes prédictions d'abord
+                SELECT f.customer_id, f.feedback_text
+                FROM customer_feedback f
+                LEFT JOIN feedback_analysis fa ON f.customer_id = fa.customer_id
+                WHERE fa.analysis_id IS NULL AND f.feedback_text IS NOT NULL AND f.feedback_text != ''
+                ORDER BY f.submitted_at ASC -- Traiter les plus anciens feedbacks d'abord
                 LIMIT %s;
                 """, (ACTION_BATCH_SIZE,)
             )
-            predictions_to_process = cur.fetchall()
-            log_audit_event(conn, 'DB_FETCH', status='SUCCESS', details=f"Found {len(predictions_to_process)} predictions in current batch.")
-            print(f"[{AGENT_NAME}] Found {len(predictions_to_process)} predictions in this batch.")
+            feedback_to_process = cur.fetchall()
+            log_audit_event(conn, 'DB_FETCH', status='SUCCESS', 
+                           details=f"Found {len(feedback_to_process)} feedback items in current batch.")
+            print(f"[{AGENT_NAME}] Found {len(feedback_to_process)} feedback items in this batch.")
     except psycopg2.Error as db_err:
-        log_audit_event(conn, 'DB_FETCH', status='FAILURE', details=f"Failed fetching predictions: {db_err}")
-        print(f"ERROR [{AGENT_NAME}]: DB Error fetching predictions: {db_err}")
+        log_audit_event(conn, 'DB_FETCH', status='FAILURE', details=f"Failed fetching feedback: {db_err}")
+        print(f"ERROR [{AGENT_NAME}]: DB Error fetching feedback: {db_err}")
         conn.rollback()
-        return True # Erreur DB, attendre
+        return True  # Erreur DB, attendre
 
-    if not predictions_to_process:
-        print(f"[{AGENT_NAME}] No new predictions found needing action.")
-        log_audit_event(conn, 'BATCH_END', status='INFO', details="No predictions found to process.")
-        return False # OK, rien à faire
+    if not feedback_to_process:
+        print(f"[{AGENT_NAME}] No new feedback found needing analysis.")
+        log_audit_event(conn, 'BATCH_END', status='INFO', details="No feedback found to process.")
+        return False  # OK, rien à faire
 
     # Traitement du lot
-    actions_to_insert = []
-    for row in predictions_to_process:
-        customer_id, probability, summary, sentiment, topics = row
-        probability = probability or 0.0 # Default si NULL
-        log_audit_event(conn, 'PROCESSING_START', status='INFO', customer_id=customer_id, details=f"Processing prediction. Prob={probability:.2f}")
-        print(f"\nProcessing Customer ID: {customer_id} (Prob: {probability:.2f})")
+    analyses_to_insert = []
+    for row in feedback_to_process:
+        customer_id, feedback_text = row
+        log_audit_event(conn, 'PROCESSING_START', status='INFO', customer_id=customer_id, 
+                       details=f"Processing feedback. Length={len(feedback_text)}")
+        print(f"\nProcessing Customer ID: {customer_id} (Feedback length: {len(feedback_text)})")
 
-        # Déterminer le segment
-        risk_segment = "Low Risk"
-        if probability >= HIGH_RISK_THRESHOLD: risk_segment = "High Risk"
-        elif probability >= MEDIUM_RISK_THRESHOLD: risk_segment = "Medium Risk"
-        log_audit_event(conn, 'SEGMENTATION', status='SUCCESS', customer_id=customer_id, details=f"Segment determined: {risk_segment}")
-        print(f"   Segment: {risk_segment}")
+        # Appel Groq pour l'analyse
+        summary, sentiment, topics = analyze_feedback(conn, customer_id, feedback_text)
 
-        # Appel Groq pour l'action
-        recommended_action = call_groq_generate_action(conn, customer_id, probability, risk_segment, summary, sentiment, topics)
-
-        if recommended_action is None: # Indique Rate Limit
+        if summary is None:  # Indique Rate Limit
             print(f"   API Rate Limit hit. Stopping current batch processing.")
             api_related_failure = True
-            log_audit_event(conn, 'PROCESSING_END', status='INTERRUPTED', customer_id=customer_id, details="Batch stopped due to API rate limit.")
-            break # Arrêter le lot
-        elif "ERROR" in recommended_action: # Indique erreur API ou autre
-             print(f"   API or unexpected error during action generation. Skipping save for this customer.")
-             api_related_failure = True # Considérer comme failure pour l'attente
-             log_audit_event(conn, 'PROCESSING_END', status='FAILURE', customer_id=customer_id, details=f"Action generation failed: {recommended_action}")
-             continue # Passer au suivant (erreur déjà loggée par call_groq)
+            log_audit_event(conn, 'PROCESSING_END', status='INTERRUPTED', customer_id=customer_id, 
+                           details="Batch stopped due to API rate limit.")
+            break  # Arrêter le lot
+        elif "ERROR" in summary:  # Indique erreur API ou autre
+            print(f"   API or unexpected error during feedback analysis. Skipping save for this customer.")
+            api_related_failure = True  # Considérer comme failure pour l'attente
+            log_audit_event(conn, 'PROCESSING_END', status='FAILURE', customer_id=customer_id, 
+                           details=f"Feedback analysis failed: {summary}")
+            continue  # Passer au suivant
         else:
-            # Action générée avec succès
-            actions_to_insert.append((customer_id, risk_segment, recommended_action))
-            log_audit_event(conn, 'ACTION_GENERATED', status='SUCCESS', customer_id=customer_id, details=f"Action: {recommended_action[:60]}...")
-            print(f"   Action generated: {recommended_action[:80]}...")
+            # Analyse générée avec succès
+            analyses_to_insert.append((customer_id, summary, sentiment, topics))
+            log_audit_event(conn, 'ANALYSIS_GENERATED', status='SUCCESS', customer_id=customer_id, 
+                           details=f"Summary: '{summary[:60]}...', Sentiment: {sentiment}")
+            print(f"   Analysis generated: Summary: '{summary[:80]}...'")
+            print(f"   Sentiment: {sentiment}, Topics: {topics}")
             processed_in_batch += 1
-            # Pas de sleep ici pour l'instant, on le mettra après le commit groupé si besoin
             log_audit_event(conn, 'PROCESSING_END', status='SUCCESS', customer_id=customer_id)
 
-
-    # Insérer les actions générées pour ce lot
-    if actions_to_insert:
-        insert_query = """INSERT INTO actions (customer_id, segment, recommended_action) VALUES (%s, %s, %s) ON CONFLICT (customer_id) DO NOTHING;"""
+    # Insérer les analyses générées pour ce lot
+    if analyses_to_insert:
+        insert_query = """
+        INSERT INTO feedback_analysis (customer_id, feedback_summary, sentiment, key_topics) 
+        VALUES (%s, %s, %s, %s) ON CONFLICT (customer_id) DO NOTHING;
+        """
         try:
             with conn.cursor() as cur:
-                cur.executemany(insert_query, actions_to_insert)
-            conn.commit() # Commit après l'insertion réussie du lot
-            log_audit_event(conn, 'DB_SAVE', status='SUCCESS', details=f"Inserted {len(actions_to_insert)} actions.")
-            print(f"\n[{AGENT_NAME}] Inserted {len(actions_to_insert)} new actions.")
+                cur.executemany(insert_query, analyses_to_insert)
+            conn.commit()  # Commit après l'insertion réussie du lot
+            log_audit_event(conn, 'DB_SAVE', status='SUCCESS', details=f"Inserted {len(analyses_to_insert)} analyses.")
+            print(f"\n[{AGENT_NAME}] Inserted {len(analyses_to_insert)} new analyses.")
             # Petite pause après un batch réussi avec appels API
-            if not api_related_failure: # Ne pas pauser si on s'est arrêté pour rate limit
-                 time.sleep(1.0)
+            if not api_related_failure:  # Ne pas pauser si on s'est arrêté pour rate limit
+                time.sleep(1.0)
         except psycopg2.Error as db_err:
-             log_audit_event(conn, 'DB_SAVE', status='FAILURE', details=f"Action insert failed for batch: {db_err}")
-             print(f"   ERROR [{AGENT_NAME}]: DB Error inserting actions batch: {db_err}")
-             conn.rollback()
-             log_audit_event(conn, 'BATCH_END', status='FAILURE', details="Batch failed during DB save.")
-             return True # Erreur DB
+            log_audit_event(conn, 'DB_SAVE', status='FAILURE', details=f"Analysis insert failed for batch: {db_err}")
+            print(f"   ERROR [{AGENT_NAME}]: DB Error inserting analyses batch: {db_err}")
+            conn.rollback()
+            log_audit_event(conn, 'BATCH_END', status='FAILURE', details="Batch failed during DB save.")
+            return True  # Erreur DB
 
-    log_audit_event(conn, 'BATCH_END', status='INFO' if not api_related_failure else 'INTERRUPTED', details=f"Finished action batch. Generated/Saved {len(actions_to_insert)} actions. API failure encountered: {api_related_failure}")
+    log_audit_event(conn, 'BATCH_END', status='INFO' if not api_related_failure else 'INTERRUPTED', 
+                   details=f"Finished analysis batch. Generated/Saved {len(analyses_to_insert)} analyses. API failure encountered: {api_related_failure}")
     print(f"[{AGENT_NAME}] Finished batch processing.")
     return api_related_failure
 
@@ -255,28 +285,28 @@ if __name__ == "__main__":
     db_conn = connect_db()
 
     while True:
-        error_occurred = False # Inclut rate limit pour l'attente
+        error_occurred = False  # Inclut rate limit pour l'attente
         try:
             if db_conn is None or db_conn.closed:
                 print(f"WARNING [{AGENT_NAME}]: Database connection found closed. Reconnecting...")
                 log_audit_event(db_conn, 'DB_CONNECT', status='WARNING', details='Connection lost, attempting reconnect.')
                 db_conn = connect_db()
 
-            error_occurred = process_predictions_for_actions(db_conn)
+            error_occurred = process_feedback_for_analysis(db_conn)
 
         except psycopg2.InterfaceError as ie:
-             print(f"ERROR [{AGENT_NAME}]: Database InterfaceError: {ie}. Attempting to reconnect...")
-             log_audit_event(db_conn, 'DB_CONNECT', status='ERROR', details=f'InterfaceError: {ie}')
-             if db_conn and not db_conn.closed:
-                 try: db_conn.close()
-                 except Exception: pass
-             db_conn = connect_db()
-             error_occurred = True
+            print(f"ERROR [{AGENT_NAME}]: Database InterfaceError: {ie}. Attempting to reconnect...")
+            log_audit_event(db_conn, 'DB_CONNECT', status='ERROR', details=f'InterfaceError: {ie}')
+            if db_conn and not db_conn.closed:
+                try: db_conn.close()
+                except Exception: pass
+            db_conn = connect_db()
+            error_occurred = True
 
         except Exception as e:
-             print(f"FATAL [{AGENT_NAME}]: An unexpected error occurred in main loop: {e}")
-             log_audit_event(db_conn, 'UNEXPECTED_ERROR', status='ERROR', details=f"Main loop error: {type(e).__name__} - {e}")
-             error_occurred = True
+            print(f"FATAL [{AGENT_NAME}]: An unexpected error occurred in main loop: {e}")
+            log_audit_event(db_conn, 'UNEXPECTED_ERROR', status='ERROR', details=f"Main loop error: {type(e).__name__} - {e}")
+            error_occurred = True
 
         # Attente
         current_wait_time = API_RETRY_DELAY_SECONDS if error_occurred else PROCESS_INTERVAL_SECONDS
