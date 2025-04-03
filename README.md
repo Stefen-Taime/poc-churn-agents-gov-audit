@@ -83,39 +83,6 @@ This POC integrates several elements to demonstrate how governance would be mana
     docker-compose down
     ```
 
-## Project Structure
-Use code with caution.
-Markdown
-poc-churn-agents-gov-audit/
-├── docker-compose.yml
-├── .env
-├── README.md
-├── create_model.py
-│
-├── data_source/
-│ └── init.sql
-│
-├── agent_nlp/
-│ ├── Dockerfile
-│ ├── requirements.txt
-│ └── agent.py
-│
-├── agent_prediction/
-│ ├── Dockerfile
-│ ├── requirements.txt
-│ ├── model.pkl # (Created by create_model.py)
-│ └── agent.py
-│
-├── agent_segmentation_action/
-│ ├── Dockerfile
-│ ├── requirements.txt
-│ └── agent.py
-│
-└── ui_dashboard/
-├── Dockerfile
-├── requirements.txt
-└── app.py
-
 ## Agent Functionality
 
 ### Agent NLP
