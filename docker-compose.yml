@@ -1,0 +1,132 @@
+version: '3.8'
+
+services:
+  # --- Base de Données ---
+  db:
+    image: postgres:14-alpine # Version PostgreSQL
+    container_name: poc_db_gov_audit # Nom unique pour ce POC
+    environment:
+      # Chargés depuis le fichier .env
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data_gov_audit:/var/lib/postgresql/data # Volume nommé unique
+      # Exécute le script SQL au premier démarrage du conteneur pour créer tables et données
+      - ./data_source/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      # Exposer le port sur l'hôte (optionnel, utile pour débugger avec un client SQL externe)
+      - "5433:5432" # Utiliser 5433 sur l'hôte pour éviter conflit avec un autre postgres local
+    networks:
+      - poc_network_gov_audit # Réseau unique
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Adminer (Interface Web pour la BD) ---
+  adminer:
+    image: adminer:latest
+    container_name: poc_adminer_gov_audit
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080" # Port pour accéder à l'interface web
+    environment:
+      ADMINER_DEFAULT_SERVER: db # Pointer vers le service db
+      ADMINER_DESIGN: pepa-linha # Design moderne (optionnel)
+    networks:
+      - poc_network_gov_audit
+    restart: unless-stopped
+
+  # --- Agent Analyse NLP (Feedback) ---
+  agent_nlp:
+    build: ./agent_nlp
+    container_name: poc_agent_nlp_gov_audit
+    depends_on:
+      db:
+        condition: service_healthy # Attend que la DB soit prête
+    environment:
+      # Passer la clé API et les infos DB via l'environnement
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYTHONUNBUFFERED: 1 # Pour logs immédiats
+    volumes:
+      # Monter le .env pour que dotenv puisse le lire
+      - ./.env:/app/.env:ro # :ro pour read-only
+    networks:
+      - poc_network_gov_audit
+    restart: on-failure
+
+  # --- Agent Prédiction Churn (Modèle ML) ---
+  agent_prediction:
+    build: ./agent_prediction
+    container_name: poc_agent_prediction_gov_audit
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./.env:/app/.env:ro
+      # Le model.pkl est copié dans l'image via le Dockerfile
+    networks:
+      - poc_network_gov_audit
+    restart: on-failure
+
+  # --- Agent Segmentation & Action ---
+  agent_segmentation_action:
+    build: ./agent_segmentation_action
+    container_name: poc_agent_action_gov_audit # Nom plus court
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./.env:/app/.env:ro
+    networks:
+      - poc_network_gov_audit
+    restart: on-failure
+
+  # --- Dashboard Web ---
+  dashboard:
+    build: ./ui_dashboard
+    container_name: poc_dashboard_gov_audit
+    depends_on:
+      db: # Attend juste que la DB soit démarrée pour tenter de s'y connecter
+        condition: service_started
+    ports:
+      - "8501:8501" # Port Streamlit par défaut
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PYTHONUNBUFFERED: 1
+    volumes:
+      - ./.env:/app/.env:ro # Au cas où
+    networks:
+      - poc_network_gov_audit
+    restart: always # Toujours redémarrer le dashboard s'il crashe
+
+# --- Volumes Nommés ---
+volumes:
+  postgres_data_gov_audit: # Nom unique
+    driver: local
+
+# --- Réseau Docker ---
+networks:
+  poc_network_gov_audit: # Nom unique
+    driver: bridge
