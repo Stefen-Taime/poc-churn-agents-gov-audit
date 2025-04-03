@@ -1,91 +1,91 @@
-# POC : Prédiction de Churn et Actions de Rétention avec Agents IA (Docker & Groq) - Démo Gouvernance & Audit
+# POC: Churn Prediction and Retention Actions with AI Agents (Docker & Groq) - Governance & Audit Demo
 
-Ce projet est un Proof of Concept (POC) démontrant comment une architecture basée sur des agents IA, orchestrée avec Docker Compose, peut être utilisée pour prédire le churn client et générer des actions de rétention personnalisées en utilisant un LLM (via l'API Groq).
+This project is a Proof of Concept (POC) demonstrating how an architecture based on AI agents, orchestrated with Docker Compose, can be used to predict customer churn and generate personalized retention actions using an LLM (via the Groq API).
 
-Un accent particulier est mis sur la **démonstration des principes de gouvernance des données**, incluant une **piste d'audit**, même dans le contexte d'un POC utilisant des données synthétiques.
+A particular emphasis is placed on **demonstrating data governance principles**, including an **audit trail**, even within the context of a POC using synthetic data.
 
 ## Architecture
 
-Le système est composé de plusieurs services conteneurisés :
+The system consists of several containerized services:
 
-1.  **`db` (PostgreSQL) :** Stocke les données clients (synthétiques), les analyses de feedback, les prédictions de churn, les actions recommandées, et une **table `audit_log`** dédiée.
-2.  **`agent_nlp` :**
-    *   Lit les feedbacks clients depuis la base de données.
-    *   **Logue les étapes clés** dans `audit_log`.
-    *   **Vérifie le consentement** client (logué).
-    *   **Anonymise** le texte du feedback (simulé et logué).
-    *   Appelle l'API Groq (appel logué).
-    *   Stocke les résultats de l'analyse (sauvegarde loguée).
-3.  **`agent_prediction` :**
-    *   Charge un modèle ML (chargement logué).
-    *   Lit les caractéristiques clients.
-    *   Prédit la probabilité de churn (prédiction loguée).
-    *   Stocke les prédictions (sauvegarde loguée).
-4.  **`agent_segmentation_action` :**
-    *   Lit les prédictions et analyses.
-    *   Détermine un segment de risque.
-    *   Appelle l'API Groq pour générer une action (appel logué).
-    *   Stocke le segment et l'action (sauvegarde loguée).
-5.  **`ui_dashboard` (Streamlit) :**
-    *   Fournit une interface web pour visualiser les données, analyses, prédictions, actions, et **les logs d'audit**.
+1.  **`db` (PostgreSQL):** Stores customer data (synthetic), feedback analyses, churn predictions, recommended actions, and a dedicated **`audit_log` table**.
+2.  **`agent_nlp`:**
+    *   Reads customer feedback from the database.
+    *   **Logs key steps** in `audit_log`.
+    *   **Checks customer consent** (logged).
+    *   **Anonymizes** feedback text (simulated and logged).
+    *   Calls the Groq API (call logged).
+    *   Stores analysis results (save logged).
+3.  **`agent_prediction`:**
+    *   Loads an ML model (load logged).
+    *   Reads customer features.
+    *   Predicts churn probability (prediction logged).
+    *   Stores predictions (save logged).
+4.  **`agent_segmentation_action`:**
+    *   Reads predictions and analyses.
+    *   Determines a risk segment.
+    *   Calls the Groq API to generate an action (call logged).
+    *   Stores the segment and action (save logged).
+5.  **`ui_dashboard` (Streamlit):**
+    *   Provides a web interface to visualize data, analyses, predictions, actions, and **the audit logs**.
 
-## Démonstration de la Gouvernance des Données (dans le POC)
+## Data Governance Demonstration (in this POC)
 
-Ce POC intègre plusieurs éléments pour démontrer comment la gouvernance serait gérée en production :
+This POC integrates several elements to demonstrate how governance would be managed in production:
 
-1.  **Données Synthétiques Uniquement :** Aucune donnée client réelle n'est utilisée.
-2.  **Vérification du Consentement :** L'`agent_nlp` vérifie et logue le statut du consentement.
-3.  **Anonymisation Simulée :** L'`agent_nlp` applique et logue l'étape d'anonymisation avant l'appel externe.
-4.  **Isolation des Appels Externes :** Seuls les agents désignés communiquent avec l'API externe.
-5.  **Logging et Auditabilité :**
-    *   Une table **`audit_log`** dédiée enregistre les événements critiques (vérifications, appels API, sauvegardes BDD, erreurs).
-    *   Chaque agent utilise une fonction helper pour écrire dans cette table, fournissant une piste d'audit centralisée.
-    *   Ces logs sont visibles dans le dashboard pour une transparence accrue.
-6.  **Gestion Sécurisée des Secrets (Basique) :** Clé API via `.env` (à protéger et remplacer par Vault en prod).
-7.  **Transition vers la Production :** Rappel que Groq serait remplacé par un LLM interne/privé en production. En production, l'audit pourrait être géré par un agent dédié et un message queue pour plus de résilience et de découplage.
+1.  **Synthetic Data Only:** No real customer data is used.
+2.  **Consent Verification:** The `agent_nlp` checks and logs consent status.
+3.  **Simulated Anonymization:** The `agent_nlp` applies and logs the anonymization step before the external call.
+4.  **Isolation of External Calls:** Only designated agents communicate with the external API.
+5.  **Logging and Auditability:**
+    *   A dedicated **`audit_log`** table records critical events (checks, API calls, DB saves, errors).
+    *   Each agent uses a helper function to write to this table, providing a centralized audit trail.
+    *   These logs are visible in the dashboard for increased transparency.
+6.  **Secure Secret Management (Basic):** API key via `.env` (to be protected and replaced by Vault in production).
+7.  **Transition to Production:** Reminder that Groq would be replaced by an internal/private LLM in production. In production, auditing could be handled by a dedicated agent and a message queue for more resilience and decoupling.
 
-## Prérequis
+## Prerequisites
 
 *   Docker
 *   Docker Compose
-*   Une clé API Groq (obtenue sur [console.groq.com](https://console.groq.com/))
-*   Python (pour créer le modèle `model.pkl` initialement)
-*   Bibliothèques Python locales: `scikit-learn`, `pandas`, `joblib` (ou `pickle`) pour créer le modèle.
+*   A Groq API key (obtainable from [console.groq.com](https://console.groq.com/))
+*   Python (to initially create the `model.pkl` model)
+*   Local Python libraries: `scikit-learn`, `pandas`, `joblib` (or `pickle`) to create the model.
 
-## Installation et Lancement
+## Installation and Launch
 
-1.  **Cloner le dépôt ou créer la structure de fichiers.**
-2.  **Créer le fichier `.env`** à la racine et ajoutez vos identifiants de base de données (peuvent rester ceux par défaut) et votre clé API Groq :
+1.  **Clone the repository or create the file structure.**
+2.  **Create the `.env` file** at the root and add your database credentials (can remain the default ones) and your Groq API key:
     ```env
     POSTGRES_USER=pocuser
     POSTGRES_PASSWORD=pocpassword
     POSTGRES_DB=pocdb
-    GROQ_API_KEY=gsk_VOTRE_CLE_API_GROQ_ICI
+    GROQ_API_KEY=gsk_YOUR_GROQ_API_KEY_HERE
     ```
-3.  **Créer le modèle `model.pkl` :**
-    *   Exécutez le script Python `create_model.py` fourni pour générer un modèle basique de prédiction de churn.
-    *   Le modèle sera sauvegardé dans le dossier `agent_prediction/` sous le nom `model.pkl`.
-4.  **Construire et Lancer les Conteneurs :** Depuis le dossier racine `poc-churn-agents-gov-audit/`
+3.  **Create the `model.pkl` model:**
+    *   Execute the provided Python script `create_model.py` to generate a basic churn prediction model.
+    *   The model will be saved in the `agent_prediction/` folder under the name `model.pkl`.
+4.  **Build and Launch the Containers:** From the root directory `poc-churn-agents-gov-audit/`
     ```bash
     docker-compose up --build -d
     ```
-    *   Le `-d` lance les conteneurs en arrière-plan. Enlevez-le pour voir tous les logs en direct.
-5.  **Accéder au Dashboard :** Ouvrez votre navigateur et allez à `http://localhost:8501`.
-6.  **Observer les Logs Docker :** Pour voir l'activité brute des agents :
+    *   The `-d` flag runs containers in the background. Remove it to see all logs live.
+5.  **Access the Dashboard:** Open your browser and go to `http://localhost:8501`.
+6.  **Observe Docker Logs:** To see the raw activity of the agents:
     ```bash
     docker-compose logs -f agent_nlp
     docker-compose logs -f agent_prediction
     docker-compose logs -f agent_segmentation_action
     ```
-7.  **Consulter l'Audit Log :** Via la section dédiée ("Audit Log") dans le dashboard Streamlit.
-8.  **Arrêter les Conteneurs :**
+7.  **Consult the Audit Log:** Via the dedicated section ("Audit Log") in the Streamlit dashboard.
+8.  **Stop the Containers:**
     ```bash
     docker-compose down
     ```
 
-## Structure du Projet
-
-```
+## Project Structure
+Use code with caution.
+Markdown
 poc-churn-agents-gov-audit/
 ├── docker-compose.yml
 ├── .env
@@ -93,52 +93,46 @@ poc-churn-agents-gov-audit/
 ├── create_model.py
 │
 ├── data_source/
-│   └── init.sql
+│ └── init.sql
 │
 ├── agent_nlp/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── agent.py
+│ ├── Dockerfile
+│ ├── requirements.txt
+│ └── agent.py
 │
 ├── agent_prediction/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── model.pkl            # (Créé par create_model.py)
-│   └── agent.py
+│ ├── Dockerfile
+│ ├── requirements.txt
+│ ├── model.pkl # (Created by create_model.py)
+│ └── agent.py
 │
 ├── agent_segmentation_action/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── agent.py
+│ ├── Dockerfile
+│ ├── requirements.txt
+│ └── agent.py
 │
 └── ui_dashboard/
-    ├── Dockerfile
-    ├── requirements.txt
-    └── app.py
-```
+├── Dockerfile
+├── requirements.txt
+└── app.py
 
-## Fonctionnement des Agents
+## Agent Functionality
 
 ### Agent NLP
-Analyse les feedbacks clients en utilisant l'API Groq pour extraire le sentiment, les sujets clés et un résumé. Vérifie le consentement et anonymise les données avant tout appel externe.
+Analyzes customer feedback using the Groq API to extract sentiment, key topics, and a summary. Checks consent and anonymizes data before any external call.
 
 ### Agent Prediction
-Utilise un modèle ML simple pour prédire la probabilité de churn de chaque client en fonction de caractéristiques comme le nombre de jours depuis la dernière activité et le nombre de plaintes.
+Uses a simple ML model to predict the churn probability for each customer based on features like days since last activity and number of complaints.
 
 ### Agent Segmentation & Action
-Segmente les clients en catégories de risque (Élevé, Moyen, Faible) et génère des actions de rétention personnalisées via l'API Groq en tenant compte du segment de risque et de l'analyse du feedback.
+Segments customers into risk categories (High, Medium, Low) and generates personalized retention actions via the Groq API, taking into account the risk segment and feedback analysis.
 
 ### Dashboard UI
-Interface utilisateur Streamlit permettant de visualiser toutes les données et les logs d'audit, avec des filtres pour faciliter l'exploration.
+Streamlit user interface allowing visualization of all data and audit logs, with filters for easier exploration.
 
-## Notes Importantes
+## Important Notes
 
-- Ce POC est conçu pour démontrer des principes d'architecture et de gouvernance, pas pour être déployé en production tel quel.
-- Les données sont entièrement synthétiques et générées à des fins de démonstration.
-- En production, l'API Groq serait remplacée par un LLM interne ou privé avec des contrôles de sécurité supplémentaires.
-- La gestion des secrets (.env) est simplifiée pour ce POC et devrait être renforcée en production.
-
-## Licence
-
-Ce projet est fourni à titre d'exemple et peut être utilisé librement comme base pour vos propres POCs ou projets.
-# poc-churn-agents-gov-audit
+- This POC is designed to demonstrate architectural and governance principles, not to be deployed to production as is.
+- The data is entirely synthetic and generated for demonstration purposes.
+- In production, the Groq API would be replaced by an internal or private LLM with additional security controls.
+- Secret management (.env) is simplified for this POC and should be strengthened in production.
